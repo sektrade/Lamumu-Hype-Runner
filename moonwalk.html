@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Moonwalk Runner — NFT Mini Game</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji"; background:#0b0f14; color:#e9f0f7; }
+    .wrap { display:grid; place-items:center; min-height:100%; padding:16px; }
+    .card { width:min(420px, 96vw); background:#0f1520; border:1px solid #1b2433; border-radius:20px; box-shadow:0 10px 30px rgba(0,0,0,.35); overflow:hidden; }
+    header { padding:14px 16px; display:flex; align-items:center; justify-content:space-between; background:linear-gradient(180deg,#101827,#0f1520); border-bottom:1px solid #1b2433; }
+    header h1 { font-size:16px; margin:0; letter-spacing:.3px; font-weight:700; }
+    header .btn { appearance:none; border:1px solid #253045; background:#0f1520; color:#b5c4d8; padding:6px 10px; border-radius:10px; cursor:pointer; font-weight:600; }
+    #game { display:block; width:100%; height:auto; background:#0a0d14; image-rendering:pixelated; }
+    .hud { display:flex; gap:8px; padding:10px 14px; align-items:center; justify-content:space-between; border-top:1px solid #1b2433; background:#0f1520; }
+    .hud .pill { background:#0b1220; border:1px solid #20304a; border-radius:999px; padding:6px 10px; font-weight:700; font-size:12px; }
+    .hint { font-size:12px; opacity:.8; }
+    .touchbar { display:grid; grid-template-columns: 1fr; }
+
+    /* Start / GameOver overlays */
+    .overlay { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
+    .panel { pointer-events:auto; text-align:center; padding:18px; background:rgba(10,14,22,.85); border:1px solid #233049; border-radius:16px; backdrop-filter: blur(6px);
+             box-shadow:0 8px 24px rgba(0,0,0,.45); width:min(85%, 340px); }
+    .panel h2 { margin:0 0 6px; font-size:20px; }
+    .panel p { margin:6px 0 14px; font-size:13px; color:#b9c7da; }
+    .panel .cta { display:inline-block; padding:10px 14px; border-radius:12px; font-weight:800; letter-spacing:.3px; background:linear-gradient(135deg,#2dd4bf,#60a5fa);
+                  color:#081018; border:0; cursor:pointer; }
+
+    /* Mobile tap area helper */
+    @media (hover: none) and (pointer: coarse) {
+      .touchbar { margin: 8px 14px 14px; }
+      .tap { appearance:none; border:1px dashed #2a3a57; background:#0b1322; color:#bcd2f2; padding:12px; border-radius:14px; font-size:14px; font-weight:700; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <h1>🌙 Moonwalk Runner</h1>
+        <button id="btnReset" class="btn" title="Yeniden başlat">↻ Reset</button>
+      </header>
+
+      <!-- GAME CANVAS -->
+      <div style="position:relative">
+        <canvas id="game" width="360" height="640"></canvas>
+        <div id="overlay" class="overlay" hidden>
+          <div class="panel" id="panelStart">
+            <h2>Moonwalk’a Hazır mısın?</h2>
+            <p>Basılı tut veya tıkla → <b>Moonwalk (Slide)</b><br/>Engellerin altından kay, puan topla, hızlan!</p>
+            <button class="cta" id="btnStart">Başlat</button>
+          </div>
+          <div class="panel" id="panelGameOver" hidden>
+            <h2>Game Over</h2>
+            <p><span id="finalScore">0</span> puan yaptın. Yeniden dene ve <b>HYPE</b>’ı yükselt!</p>
+            <button class="cta" id="btnAgain">Tekrar Oyna</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud">
+        <div class="pill">Skor: <span id="score">0</span></div>
+        <div class="pill">En iyi: <span id="best">0</span></div>
+        <div class="hint">PC: Space · Mobil: Dokun/Kaydır</div>
+      </div>
+
+      <div class="touchbar">
+        <button id="tapBtn" class="tap" aria-label="Moonwalk yap">Basılı Tut: Moonwalk</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =============================
+    // 🔧 GÖRSELLERİNİ BURAYA EKLE
+    // =============================
+    // 1) Karakter görselini base64 (PNG) olarak bu değişkene yapıştır:
+    //    a) Tüm data-URL ile: 'data:image/png;base64,iVBORw0KGgoAAA...'
+    //    b) Yalnızca ham base64 ile: 'iVBORw0KGgoAAA...'
+    //    Not: Şeffaf arka planlı, yaklaşık 120x120 px önerilir.
+    const SPRITE_SRC = '';
+
+    // 2) (Opsiyonel) Arka plan görseli. Eğer boş kalırsa neon degrade arka plan kullanılır.
+    //    Data-URL, ham base64 veya http/https yol da verebilirsin.
+    const BG_SRC = '';
+
+    // Çizim için görselleri yükle
+    function normalizeImageSource(s){
+      if(!s) return '';
+      if (s.startsWith('data:image/')) return s;                 // zaten data-URL
+      if (/^https?:\/\//i.test(s) || s.startsWith('./') || s.startsWith('/')) return s; // harici yol
+      if (/^[A-Za-z0-9+/=]+$/.test(s)) return 'data:image/png;base64,' + s; // ham base64
+      return s;
+    }
+    const spriteImg = new Image();
+    const bgImg = new Image();
+    const normalizedSprite = normalizeImageSource(SPRITE_SRC);
+    const normalizedBg = normalizeImageSource(BG_SRC);
+    if (normalizedSprite) spriteImg.src = normalizedSprite;
+    if (normalizedBg) bgImg.src = normalizedBg;
+    ;[spriteImg, bgImg].forEach(img => img.addEventListener('error', () => {
+      console.warn('Görsel yüklenemedi:', img.src);
+    }));
+
+    // ===============
+    // OYUN DEĞİŞKENLERİ
+    // ===============
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    let W = canvas.width, H = canvas.height;
+
+    // Responsive ölçek (görüntüyü keskin tutmak için sadece CSS ile büyütüyoruz)
+    function resize() {
+      // Canvas piksel boyutu sabit; CSS genişliği kart genişliği kadar.
+      // Oyun içi hesaplar sabit çözünürlüğe göre.
+    }
+    window.addEventListener('resize', resize); resize();
+
+    // Fizik ve state
+    const GROUND_Y = H - 110; // zemin çizgisi
+    const SPEED_START = 3.2;
+    const SPEED_MAX = 9.5;
+    const SPEED_ACC = 0.0009; // frame başına ivme
+
+    const player = {
+      x: 64,
+      y: GROUND_Y,
+      w: 80,
+      h: 100,
+      vy: 0, // zıplama kullanmıyoruz, ama ileride eklemek istersen hazır kalsın
+      sliding: false,
+      slideTimer: 0,
+      slideDuration: 420, // ms
+      hitbox(){
+        const hh = this.sliding ? this.h*0.55 : this.h; // slide’da daha alçak
+        return {x:this.x - this.w*0.4, y:this.y - hh, w:this.w*0.8, h:hh};
+      }
+    };
+
+    const world = {
+      t: 0,
+      speed: SPEED_START,
+      score: 0,
+      best: +localStorage.getItem('moonwalk_best') || 0,
+      running: false,
+      hypeFlash: 0, // HYPE efekti
+    };
+
+    document.getElementById('best').textContent = world.best;
+
+    // Engel: üstten sarkan bar, kayarak geçilir
+    function makeObstacle() {
+      const gapBottom = GROUND_Y - (60 + Math.random()*40); // engelin alt boşluğu
+      const thickness = 24 + Math.random()*10;
+      return { x: W + 40, y: gapBottom, w: 40 + Math.random()*30, h: thickness, passed: false };
+    }
+
+    const obstacles = [];
+    let spawnTimer = 0;
+
+    // Girdi — Space / Mouse / Touch = Slide (Moonwalk)
+    let pointerDown = false;
+    function startSlide(){
+      player.sliding = true; player.slideTimer = player.slideDuration; // ms
+    }
+    function stopSlide(){
+      pointerDown = false; // bırakınca doğal süre dolunca kalksın
+    }
+
+    // UI
+    const overlay = document.getElementById('overlay');
+    const panelStart = document.getElementById('panelStart');
+    const panelGameOver = document.getElementById('panelGameOver');
+    const finalScore = document.getElementById('finalScore');
+
+    function showStart(){
+      overlay.hidden = false; panelStart.hidden = false; panelGameOver.hidden = true;
+    }
+    function showGameOver(){
+      overlay.hidden = false; panelStart.hidden = true; panelGameOver.hidden = false;
+      finalScore.textContent = world.score;
+    }
+    function hideOverlay(){ overlay.hidden = true; }
+
+    function resetGame(){
+      world.t = 0; world.speed = SPEED_START; world.score = 0; world.hypeFlash = 0;
+      obstacles.length = 0; spawnTimer = 0;
+      player.sliding = false; player.slideTimer = 0; pointerDown = false;
+      document.getElementById('score').textContent = '0';
+    }
+
+    function startGame(){
+      resetGame();
+      world.running = true; hideOverlay();
+    }
+
+    function endGame(){
+      world.running = false;
+      if (world.score > world.best){
+        world.best = world.score;
+        localStorage.setItem('moonwalk_best', world.best);
+        document.getElementById('best').textContent = world.best;
+      }
+      showGameOver();
+    }
+
+    // Eventler
+    document.getElementById('btnStart').addEventListener('click', startGame);
+    document.getElementById('btnAgain').addEventListener('click', ()=>{ startGame(); });
+    document.getElementById('btnReset').addEventListener('click', ()=>{ showStart(); resetGame(); });
+
+    // Pointer (mobil)
+    const tapBtn = document.getElementById('tapBtn');
+    tapBtn.addEventListener('pointerdown', ()=>{ pointerDown = true; startSlide(); });
+    tapBtn.addEventListener('pointerup', stopSlide);
+    tapBtn.addEventListener('pointerleave', stopSlide);
+
+    // Canvas’a da dokunuş kabul et
+    canvas.addEventListener('pointerdown', ()=>{ pointerDown = true; startSlide(); });
+    window.addEventListener('pointerup', stopSlide);
+
+    // Klavye (PC)
+    window.addEventListener('keydown', (e)=>{
+      if (e.code === 'Space'){ e.preventDefault(); pointerDown = true; startSlide(); }
+      if (!world.running && (e.code === 'Enter' || e.code==='Space')) startGame();
+    });
+    window.addEventListener('keyup', (e)=>{
+      if (e.code === 'Space'){ pointerDown = false; }
+    });
+
+    // ===============
+    // OYUN DÖNGÜSÜ
+    // ===============
+    let lastMs = performance.now();
+    function loop(now){
+      const dtMs = Math.min(34, now - lastMs); //  ~60fps sabitleme
+      const dt = dtMs / 16.6667; // frame katsayısı
+      lastMs = now;
+
+      update(dtMs, dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    function update(dtMs, dt){
+      if (!world.running){ return; }
+      world.t += dtMs;
+
+      // Hızlanma
+      world.speed = Math.min(SPEED_MAX, world.speed + SPEED_ACC * dtMs);
+
+      // Slide zamanlayıcı
+      if (player.sliding){
+        player.slideTimer -= dtMs;
+        if (player.slideTimer <= 0 && !pointerDown) {
+          player.sliding = false; player.slideTimer = 0;
+        } else if (player.slideTimer <= 0 && pointerDown){
+          // basılı tutuyorsa süreyi tazeliyoruz (yumuşak his)
+          player.slideTimer = 60; // kısa tazeleme
+        }
+      }
+
+      // Engel üretimi — hız arttıkça daha sık
+      spawnTimer -= dtMs;
+      const spawnEvery = Math.max(480, 1200 - world.speed*120);
+      if (spawnTimer <= 0){
+        obstacles.push(makeObstacle());
+        spawnTimer = spawnEvery;
+      }
+
+      // Engelleri hareket ettir ve çarpışma kontrolü
+      for (let i=obstacles.length-1; i>=0; i--){
+        const o = obstacles[i];
+        o.x -= world.speed * 3.2; // ekran hızı
+
+        // Skor: güvenle geçince +1 ve HYPE efekti
+        if (!o.passed && o.x + o.w < player.x - 18){
+          o.passed = true; world.score++; world.hypeFlash = 300; // ms
+          document.getElementById('score').textContent = world.score;
+        }
+
+        // Çarpışma — barın altı boşluk; karakter bu boşluğun altındaysa çarpışır
+        const hb = player.hitbox();
+        const barRect = { x:o.x, y:o.y, w:o.w, h:o.h };
+        if (rectOverlap(hb, barRect)){
+          endGame();
+          break;
+        }
+
+        if (o.x + o.w < -10){ obstacles.splice(i,1); }
+      }
+    }
+
+    function rectOverlap(a,b){
+      return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    // ===============
+    // ÇİZİM
+    // ===============
+    function draw(){
+      // Arka plan
+      if (bgImg.src){
+        // döngüsel parallax
+        const bgSpeed = world.speed * 0.6;
+        const t = (world.t*0.06*bgSpeed) % bgImg.width;
+        for (let x = -t; x < W; x += bgImg.width){
+          ctx.drawImage(bgImg, x, 0, bgImg.width, H);
+        }
+      } else {
+        // neon degrade
+        const g = ctx.createLinearGradient(0,0,0,H);
+        g.addColorStop(0, '#0a1220');
+        g.addColorStop(0.55, '#0b1120');
+        g.addColorStop(1, '#0a0d16');
+        ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+        // ‘sahne’ ışıkları
+        const rays = 6;
+        for (let i=0;i<rays;i++){
+          const x = (i/rays)*W + ((Math.sin((world.t*0.001)+i)*0.5+0.5)*W/rays)*0.2;
+          const grad = ctx.createLinearGradient(x,0,x+80,H);
+          grad.addColorStop(0,'rgba(46,204,250,0)');
+          grad.addColorStop(0.5,'rgba(46,204,250,0.06)');
+          grad.addColorStop(1,'rgba(46,204,250,0)');
+          ctx.fillStyle=grad; ctx.fillRect(x,0,100,H);
+        }
+      }
+
+      // Zemin çizgisi
+      ctx.strokeStyle = '#1f2b3d';
+      ctx.lineWidth = 2; ctx.beginPath();
+      ctx.moveTo(0,GROUND_Y+1); ctx.lineTo(W,GROUND_Y+1); ctx.stroke();
+
+      // Engeller (üstten barlar)
+      for (const o of obstacles){
+        const neon = ctx.createLinearGradient(o.x, o.y, o.x, o.y+o.h);
+        neon.addColorStop(0,'#7dd3fc');
+        neon.addColorStop(1,'#22d3ee');
+        ctx.fillStyle = neon;
+        roundRect(ctx, o.x, o.y, o.w, o.h, 6, true, false);
+        // zincir çizgisi (dekor)
+        ctx.fillStyle = 'rgba(173,216,230,0.15)';
+        ctx.fillRect(o.x+o.w*0.3, 0, 2, o.y);
+      }
+
+      // Karakter
+      drawPlayer();
+
+      // HYPE flaşı
+      if (world.hypeFlash > 0){
+        world.hypeFlash -= 16.7;
+        const t = Math.max(0, world.hypeFlash/300);
+        ctx.save();
+        ctx.globalAlpha = 0.18 * t;
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillRect(0,0,W,H);
+        ctx.restore();
+
+        // metin
+        ctx.save();
+        ctx.globalAlpha = 0.9 * t;
+        ctx.font = 'bold 48px system-ui, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#60a5fa'; ctx.shadowBlur = 18;
+        ctx.fillStyle = '#e0f2fe';
+        ctx.fillText('HYPE', W/2, H*0.28);
+        ctx.restore();
+      }
+
+      // Başlangıç ekranı açıkken overlay göster
+      if (!world.running && overlay.hidden){ overlay.hidden = false; panelStart.hidden = false; panelGameOver.hidden = true; }
+    }
+
+    function drawPlayer(){
+      const bob = Math.sin(world.t*0.008)*3; // hafif zıplama
+      const slideOffsetY = player.sliding ? 18 : 0;
+      const x = player.x, y = player.y - player.h + bob + slideOffsetY;
+
+      // Gölge
+      ctx.save();
+      ctx.globalAlpha = 0.35; ctx.fillStyle = '#0b1220';
+      ctx.beginPath(); ctx.ellipse(x, GROUND_Y+6, 34, 10, 0, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+
+      // Sprite veya placeholder
+      if (spriteImg.complete && spriteImg.naturalWidth){
+        const scale = Math.min(1, player.w / spriteImg.naturalWidth);
+        const dw = spriteImg.naturalWidth * scale;
+        const dh = spriteImg.naturalHeight * scale;
+        const tilt = player.sliding ? -0.2 : -0.05; // slide esnasında daha çok eğim
+        ctx.save();
+        ctx.translate(x, y + dh);
+        ctx.rotate(tilt);
+        ctx.drawImage(spriteImg, -dw/2, -dh, dw, dh);
+        ctx.restore();
+      } else {
+        // Placeholder çizim (eğer base64 eklemediysen)
+        const r = 16; // köşe yarıçapı
+        ctx.save();
+        const grad = ctx.createLinearGradient(x-40, y, x+40, y+100);
+        grad.addColorStop(0,'#f0f9ff'); grad.addColorStop(1,'#93c5fd');
+        ctx.fillStyle = grad; ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 2;
+        roundRect(ctx, x-40, y, 80, 100, r, true, true);
+        // yüz
+        ctx.fillStyle = '#0f172a';
+        ctx.beginPath(); ctx.arc(x-12, y+36, 6, 0, Math.PI*2); ctx.arc(x+12, y+36, 6, 0, Math.PI*2); ctx.fill();
+        ctx.fillRect(x-12, y+58, 24, 6);
+        ctx.restore();
+      }
+
+      // Moonwalk iz efekti
+      if (player.sliding){
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        ctx.fillStyle = '#94a3b8';
+        const trailY = GROUND_Y + 2;
+        for (let i=0;i<6;i++){
+          const tx = x - i*14;
+          ctx.fillRect(tx, trailY, 10, 2);
+        }
+        ctx.restore();
+      }
+    }
+
+    function roundRect(ctx, x, y, w, h, r, fill, stroke) {
+      if (typeof r === 'number') r = {tl:r,tr:r,br:r,bl:r};
+      ctx.beginPath();
+      ctx.moveTo(x + r.tl, y);
+      ctx.lineTo(x + w - r.tr, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r.tr);
+      ctx.lineTo(x + w, y + h - r.br);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r.br, y + h);
+      ctx.lineTo(x + r.bl, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r.bl);
+      ctx.lineTo(x, y + r.tl);
+      ctx.quadraticCurveTo(x, y, x + r.tl, y);
+      ctx.closePath();
+      if (fill) ctx.fill();
+      if (stroke) ctx.stroke();
+    }
+
+    // Başlangıç ekranını göster
+    showStart();
+
+    // Döngüyü başlat
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
